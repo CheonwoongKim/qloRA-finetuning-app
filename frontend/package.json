@@ -1,0 +1,168 @@
+{
+  "name": "finetuning-app",
+  "version": "1.0.0",
+  "description": "QLoRA Fine-tuning Desktop Application",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "next dev -p 3001",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "electron": "cross-env NODE_ENV=development electron .",
+    "electron:dev": "cross-env NODE_ENV=development concurrently \"npm run dev\" \"wait-on http://localhost:3001 && npm run electron\"",
+    "prebundle": "node scripts/bundle-python.js && node scripts/bundle-node.js",
+    "electron:build": "npm run prebundle && npm run build && electron-builder",
+    "electron:build:mac": "npm run prebundle && npm run build && electron-builder --mac",
+    "electron:build:mac:arm": "npm run prebundle && npm run build && electron-builder --mac --arm64",
+    "electron:build:win": "npm run prebundle && npm run build && electron-builder --win",
+    "electron:build:linux": "npm run prebundle && npm run build && electron-builder --linux"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@radix-ui/react-dialog": "^1.1.15",
+    "@radix-ui/react-dropdown-menu": "^2.1.16",
+    "@radix-ui/react-popover": "^1.1.15",
+    "@radix-ui/react-select": "^2.2.6",
+    "@radix-ui/react-tabs": "^1.1.13",
+    "@radix-ui/react-tooltip": "^1.2.8",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.548.0",
+    "next": "^16.0.1",
+    "pretendard": "^1.3.9",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "recharts": "^3.3.0",
+    "tailwind-merge": "^3.3.1",
+    "tailwindcss-animate": "^1.0.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.9.2",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "autoprefixer": "^10.4.21",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "electron": "^39.0.0",
+    "electron-builder": "^26.0.12",
+    "eslint": "^9.38.0",
+    "eslint-config-next": "^16.0.1",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^3.4.18",
+    "typescript": "^5.9.3",
+    "wait-on": "^9.0.1"
+  },
+  "build": {
+    "appId": "com.finetuning.app",
+    "productName": "FineTuning App",
+    "afterPack": "./scripts/afterpack.js",
+    "files": [
+      "electron/**/*",
+      "package.json",
+      "!node_modules"
+    ],
+    "asarUnpack": [
+      "**/*.node"
+    ],
+    "buildDependenciesFromSource": false,
+    "npmRebuild": false,
+    "extraResources": [
+      {
+        "from": "../backend",
+        "to": "backend",
+        "filter": [
+          "**/*",
+          "!venv/**/*",
+          "!__pycache__/**/*",
+          "!*.pyc",
+          "!downloaded_models/**/*",
+          "!training_jobs/**/*",
+          "!uploaded_datasets/**/*"
+        ]
+      },
+      {
+        "from": "bundled_venv",
+        "to": "python_venv",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "bundled_node",
+        "to": "node_bin",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": ".next/standalone",
+        "to": "nextjs"
+      },
+      {
+        "from": ".next/static",
+        "to": "nextjs/.next/static",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "public",
+        "to": "nextjs/public",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "directories": {
+      "buildResources": "assets",
+      "output": "dist"
+    },
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "darkModeSupport": true,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ],
+      "window": {
+        "width": 540,
+        "height": 380
+      }
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development"
+    }
+  }
+}
