@@ -5,6 +5,7 @@ from pathlib import Path
 import logging
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import PeftModel
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -14,6 +15,8 @@ model_cache: Dict[str, tuple] = {}  # {model_id: (model, tokenizer)}
 
 # Downloaded models directory
 MODELS_DIR = Path("./downloaded_models")
+# Fine-tuned models directory
+FINETUNED_MODELS_DIR = Path("./training_jobs")
 
 
 def load_model(model_id: str, model_type: str):
@@ -48,10 +51,24 @@ def load_model(model_id: str, model_type: str):
             )
 
         elif model_type == "fine-tuned":
-            # TODO: Load fine-tuned models from fine-tuning output directory
-            raise HTTPException(
-                status_code=501,
-                detail="Fine-tuned model inference not yet implemented"
+            # For fine-tuned models, load from training_jobs/{job_id}/final_model
+            model_path = FINETUNED_MODELS_DIR / model_id / "final_model"
+
+            if not model_path.exists():
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Fine-tuned model not found: {model_id}. Model path: {model_path}"
+                )
+
+            logger.info(f"Loading fine-tuned model from: {model_path}")
+
+            # Load tokenizer and model from the fine-tuned model directory
+            tokenizer = AutoTokenizer.from_pretrained(str(model_path))
+            model = AutoModelForCausalLM.from_pretrained(
+                str(model_path),
+                dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+                device_map="auto" if torch.cuda.is_available() else None,
+                low_cpu_mem_usage=True
             )
         else:
             raise HTTPException(status_code=400, detail=f"Unknown model type: {model_type}")
@@ -116,7 +133,11 @@ def generate_response(model, tokenizer, message: str, history: List[Dict] = None
                 do_sample=True,
                 temperature=0.7,
                 top_p=0.9,
-                pad_token_id=tokenizer.eos_token_id
+                top_k=50,
+                repetition_penalty=1.2,
+                no_repeat_ngram_size=3,
+                pad_token_id=tokenizer.eos_token_id,
+                eos_token_id=tokenizer.eos_token_id
             )
 
         # Decode only the newly generated tokens

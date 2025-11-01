@@ -260,6 +260,14 @@ async def start_job(job_id: str):
         try:
             logger.info(f"Starting training for job {job_id}")
 
+            # Load job metadata to get configuration
+            jobs = load_jobs_metadata()
+            job = find_by_id(jobs, job_id)
+
+            if not job:
+                logger.error(f"Job {job_id} not found in metadata")
+                return
+
             # Get job configuration
             config = {
                 "model": job.get("model", "TinyLlama/TinyLlama-1.1B-Chat-v1.0"),
