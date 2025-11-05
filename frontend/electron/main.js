@@ -1,17 +1,16 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
-const { spawn } = require('child_process');
-const http = require('http');
+const ServerManager = require('./server-manager');
+const config = require('./config');
 
 let mainWindow = null;
 let loadingWindow = null;
-let pythonProcess = null;
-let nextJsServer = null;
+const serverManager = new ServerManager();
 
 function createLoadingWindow() {
   loadingWindow = new BrowserWindow({
-    width: 500,
-    height: 350,
+    width: config.window.loading.width,
+    height: config.window.loading.height,
     frame: false,
     transparent: true,
     alwaysOnTop: true,
@@ -195,42 +194,12 @@ function createLoadingWindow() {
   `);
 }
 
-// Check if server is ready
-function checkServerReady(url, maxRetries = 30, interval = 1000) {
-  return new Promise((resolve, reject) => {
-    let retries = 0;
-
-    const check = () => {
-      http.get(url, (res) => {
-        if (res.statusCode === 200 || res.statusCode === 404) {
-          console.log(`Server is ready at ${url}`);
-          resolve();
-        } else {
-          retry();
-        }
-      }).on('error', () => {
-        retry();
-      });
-    };
-
-    const retry = () => {
-      retries++;
-      if (retries >= maxRetries) {
-        reject(new Error(`Server failed to start after ${maxRetries} attempts`));
-      } else {
-        console.log(`Waiting for server... (${retries}/${maxRetries})`);
-        setTimeout(check, interval);
-      }
-    };
-
-    check();
-  });
-}
+// Server ready check is now in ServerManager
 
 async function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1400,
-    height: 900,
+    width: config.window.main.width,
+    height: config.window.main.height,
     show: false, // Don't show until ready
     webPreferences: {
       nodeIntegration: false,
@@ -241,13 +210,11 @@ async function createWindow() {
     },
   });
 
-  const loadURL = process.env.NODE_ENV === 'development'
-    ? 'http://localhost:3001'
-    : 'http://localhost:3002';
+  const loadURL = serverManager.getNextJsUrl();
 
   try {
     console.log(`Waiting for server at ${loadURL}...`);
-    await checkServerReady(loadURL);
+    await serverManager.checkServerReady(loadURL);
 
     console.log(`Loading URL: ${loadURL}`);
     await mainWindow.loadURL(loadURL);
@@ -274,143 +241,7 @@ async function createWindow() {
   });
 }
 
-// Start Next.js server in production
-async function startNextJsServer() {
-  if (process.env.NODE_ENV === 'development') {
-    return; // In dev mode, Next.js dev server is already running
-  }
-
-  // In production, run Next.js standalone server
-  const resourcesPath = process.resourcesPath;
-
-  // Path to bundled Node.js binary
-  const nodePath = path.join(resourcesPath, 'node_bin/node');
-
-  // Path to Next.js standalone server (in extraResources)
-  const serverPath = path.join(resourcesPath, 'nextjs/server.js');
-  const workingDir = path.join(resourcesPath, 'nextjs');
-
-  console.log('Starting Next.js server...');
-  console.log('Node path:', nodePath);
-  console.log('Server path:', serverPath);
-  console.log('Working directory:', workingDir);
-
-  // Start Next.js server using bundled Node.js
-  nextJsServer = spawn(nodePath, [serverPath], {
-    cwd: workingDir,
-    env: {
-      ...process.env,
-      PORT: '3002',
-      HOSTNAME: 'localhost'
-    }
-  });
-
-  nextJsServer.stdout.on('data', (data) => {
-    console.log(`[Next.js] ${data.toString().trim()}`);
-  });
-
-  nextJsServer.stderr.on('data', (data) => {
-    console.error(`[Next.js Error] ${data.toString().trim()}`);
-  });
-
-  nextJsServer.on('close', (code) => {
-    console.log(`Next.js server exited with code ${code}`);
-  });
-}
-
-// Stop Next.js server
-function stopNextJsServer() {
-  if (nextJsServer) {
-    if (typeof nextJsServer.close === 'function') {
-      nextJsServer.close();
-    } else if (typeof nextJsServer.kill === 'function') {
-      nextJsServer.kill();
-    }
-    nextJsServer = null;
-  }
-}
-
-// Find Python executable
-function findPython() {
-  const possiblePaths = [
-    '/usr/bin/python3',
-    '/usr/local/bin/python3',
-    '/opt/homebrew/bin/python3',
-    '/Library/Frameworks/Python.framework/Versions/3.12/bin/python3',
-    '/Library/Frameworks/Python.framework/Versions/3.11/bin/python3',
-  ];
-
-  // Try to find python3 in PATH
-  const { execSync } = require('child_process');
-  try {
-    const result = execSync('which python3', { encoding: 'utf8' }).trim();
-    if (result) return result;
-  } catch (e) {
-    // Continue to check possible paths
-  }
-
-  // Check each possible path
-  const fs = require('fs');
-  for (const pythonPath of possiblePaths) {
-    try {
-      if (fs.existsSync(pythonPath)) {
-        return pythonPath;
-      }
-    } catch (e) {
-      continue;
-    }
-  }
-
-  return 'python3'; // Fallback
-}
-
-// Start Python backend
-function startPythonBackend() {
-  let pythonPath, backendPath, workingDir;
-
-  // Use different ports for development and production to avoid conflicts
-  const pythonPort = process.env.NODE_ENV === 'development' ? '8000' : '8001';
-
-  if (process.env.NODE_ENV === 'development') {
-    // Development mode - use local venv
-    pythonPath = path.join(__dirname, '../../backend/venv/bin/python');
-    backendPath = path.join(__dirname, '../../backend/app/main.py');
-    workingDir = path.join(__dirname, '../../backend');
-  } else {
-    // Production mode - use bundled venv
-    const resourcesPath = process.resourcesPath;
-    pythonPath = path.join(resourcesPath, 'python_venv/bin/python');
-    backendPath = path.join(resourcesPath, 'backend/app/main.py');
-    workingDir = path.join(resourcesPath, 'backend');
-  }
-
-  console.log('Starting Python backend:', { pythonPath, backendPath, workingDir, port: pythonPort });
-
-  pythonProcess = spawn(pythonPath, ['-m', 'uvicorn', 'app.main:app', '--host', '0.0.0.0', '--port', pythonPort], {
-    cwd: workingDir,
-    env: { ...process.env }
-  });
-
-  pythonProcess.stdout.on('data', (data) => {
-    console.log(`[Python] ${data.toString().trim()}`);
-  });
-
-  pythonProcess.stderr.on('data', (data) => {
-    console.error(`[Python Error] ${data.toString().trim()}`);
-  });
-
-  pythonProcess.on('close', (code) => {
-    console.log(`Python backend exited with code ${code}`);
-  });
-}
-
-// Stop Python backend
-function stopPythonBackend() {
-  if (pythonProcess) {
-    pythonProcess.kill();
-    pythonProcess = null;
-  }
-}
+// Server management functions are now in ServerManager module
 
 // IPC Handlers
 ipcMain.handle('select-directory', async (event, defaultPath) => {
@@ -442,14 +273,13 @@ ipcMain.handle('get-path', async (event, name) => {
 app.on('ready', async () => {
   createLoadingWindow();
 
-  await startNextJsServer();
+  serverManager.startNextJsServer();
   await createWindow();
-  startPythonBackend();
+  serverManager.startPythonBackend();
 });
 
 app.on('window-all-closed', () => {
-  stopNextJsServer();
-  stopPythonBackend();
+  serverManager.stopAll();
   if (process.platform !== 'darwin') {
     app.quit();
   }
@@ -462,6 +292,5 @@ app.on('activate', () => {
 });
 
 app.on('before-quit', () => {
-  stopNextJsServer();
-  stopPythonBackend();
+  serverManager.stopAll();
 });

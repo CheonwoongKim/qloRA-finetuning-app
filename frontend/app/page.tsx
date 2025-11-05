@@ -13,7 +13,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { NewJobModal } from "@/components/new-job-modal";
 import { Settings, Activity, Plus, Search, MoreVertical, Play, Trash2, Download, Pause, StopCircle, FileText, Edit, X } from "lucide-react";
-import { API_URL } from "@/constants/api";
 import type { FineTuningJob } from "@/types/common";
 import { StatusBadge } from "@/components/ui/status-badge";
 
@@ -32,11 +31,9 @@ export default function Home() {
   const fetchJobs = async () => {
     try {
       setLoading(true);
-      const jobsRes = await fetch(`${API_URL}/jobs`);
-      if (jobsRes.ok) {
-        const jobsData = await jobsRes.json();
-        setJobs(jobsData.jobs || []);
-      }
+      const { api } = await import("@/lib/api-client");
+      const jobsData = await api.jobs.list();
+      setJobs(jobsData.jobs || []);
     } catch (error) {
       console.error("Error fetching jobs:", error);
     } finally {
@@ -56,21 +53,14 @@ export default function Home() {
 
   const handleStart = async (job: FineTuningJob) => {
     try {
-      const response = await fetch(`${API_URL}/jobs/${job.id}/start`, {
-        method: "POST",
-      });
-
-      if (response.ok) {
-        await fetchJobs(); // Refresh the list
-        // Navigate to job detail page to see progress
-        window.location.href = `/jobs/${job.id}`;
-      } else {
-        const error = await response.json();
-        alert(`Failed to start job: ${error.detail || 'Unknown error'}`);
-      }
-    } catch (error) {
+      const { apiClient } = await import("@/lib/api-client");
+      await apiClient.post(`/jobs/${job.id}/start`);
+      await fetchJobs(); // Refresh the list
+      // Navigate to job detail page to see progress
+      window.location.href = `/jobs/${job.id}`;
+    } catch (error: any) {
       console.error("Error starting job:", error);
-      alert("Failed to start job. Please try again.");
+      alert(`Failed to start job: ${error.message || 'Unknown error'}`);
     }
   };
 
@@ -87,13 +77,11 @@ export default function Home() {
 
   const handleDownload = async (job: FineTuningJob) => {
     try {
-      // Fetch checkpoints for the job
-      const response = await fetch(`${API_URL}/jobs/${job.id}/checkpoints`);
-      if (!response.ok) {
-        throw new Error("Failed to fetch checkpoints");
-      }
+      const { api } = await import("@/lib/api-client");
 
-      const data = await response.json();
+      // Fetch checkpoints for the job
+      const data = await api.jobs.checkpoints(job.id);
+
       if (!data.checkpoints || data.checkpoints.length === 0) {
         alert("No checkpoints available for download");
         return;
@@ -101,16 +89,9 @@ export default function Home() {
 
       // Download the last checkpoint (best model)
       const lastCheckpoint = data.checkpoints[data.checkpoints.length - 1];
-      const downloadUrl = `${API_URL}/jobs/${job.id}/checkpoints/${lastCheckpoint.id}/download`;
+      const filename = `${job.id}-checkpoint-${lastCheckpoint.step}.json`;
 
-      // Trigger download
-      const link = document.createElement('a');
-      link.href = downloadUrl;
-      link.download = `${job.id}-checkpoint-${lastCheckpoint.step}.json`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-
+      await api.jobs.downloadCheckpoint(job.id, lastCheckpoint.id, filename);
     } catch (error) {
       console.error("Error downloading model:", error);
       alert("Failed to download model. Please try again.");
@@ -119,19 +100,12 @@ export default function Home() {
 
   const handlePause = async (job: FineTuningJob) => {
     try {
-      const response = await fetch(`${API_URL}/jobs/${job.id}/pause`, {
-        method: "POST",
-      });
-
-      if (response.ok) {
-        await fetchJobs(); // Refresh the list
-      } else {
-        const error = await response.json();
-        alert(`Failed to pause job: ${error.detail || 'Unknown error'}`);
-      }
-    } catch (error) {
+      const { api } = await import("@/lib/api-client");
+      await api.jobs.pause(job.id);
+      await fetchJobs(); // Refresh the list
+    } catch (error: any) {
       console.error("Error pausing job:", error);
-      alert("Failed to pause job. Please try again.");
+      alert(`Failed to pause job: ${error.message || 'Unknown error'}`);
     }
   };
 
@@ -140,19 +114,12 @@ export default function Home() {
     if (!confirmed) return;
 
     try {
-      const response = await fetch(`${API_URL}/jobs/${job.id}/stop`, {
-        method: "POST",
-      });
-
-      if (response.ok) {
-        await fetchJobs(); // Refresh the list
-      } else {
-        const error = await response.json();
-        alert(`Failed to stop job: ${error.detail || 'Unknown error'}`);
-      }
-    } catch (error) {
+      const { api } = await import("@/lib/api-client");
+      await api.jobs.stop(job.id);
+      await fetchJobs(); // Refresh the list
+    } catch (error: any) {
       console.error("Error stopping job:", error);
-      alert("Failed to stop job. Please try again.");
+      alert(`Failed to stop job: ${error.message || 'Unknown error'}`);
     }
   };
 
@@ -166,6 +133,8 @@ export default function Home() {
     if (!confirmed) return;
 
     try {
+      const { api } = await import("@/lib/api-client");
+
       // Create a new job with the same configuration
       const newJobData = {
         name: `${job.name} (Retry)`,
@@ -174,24 +143,12 @@ export default function Home() {
         // Copy any other relevant configuration
       };
 
-      const response = await fetch(`${API_URL}/jobs`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(newJobData),
-      });
-
-      if (response.ok) {
-        await fetchJobs(); // Refresh the list
-        alert("New training job created successfully");
-      } else {
-        const error = await response.json();
-        alert(`Failed to create retry job: ${error.detail || 'Unknown error'}`);
-      }
-    } catch (error) {
+      await api.jobs.create(newJobData);
+      await fetchJobs(); // Refresh the list
+      alert("New training job created successfully");
+    } catch (error: any) {
       console.error("Error retrying job:", error);
-      alert("Failed to retry job. Please try again.");
+      alert(`Failed to retry job: ${error.message || 'Unknown error'}`);
     }
   };
 
@@ -200,19 +157,12 @@ export default function Home() {
     if (!confirmed) return;
 
     try {
-      const response = await fetch(`${API_URL}/jobs/${job.id}`, {
-        method: "DELETE",
-      });
-
-      if (response.ok) {
-        await fetchJobs();
-      } else {
-        const error = await response.json();
-        alert(`Failed to delete job: ${error.detail || 'Unknown error'}`);
-      }
-    } catch (error) {
+      const { api } = await import("@/lib/api-client");
+      await api.jobs.delete(job.id);
+      await fetchJobs();
+    } catch (error: any) {
       console.error("Error deleting job:", error);
-      alert("Failed to delete job. Please try again.");
+      alert(`Failed to delete job: ${error.message || 'Unknown error'}`);
     }
   };
 

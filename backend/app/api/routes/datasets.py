@@ -11,6 +11,7 @@ from app.core.storage import (
     find_by_id,
     remove_by_id
 )
+from app.core.exceptions import ResourceNotFoundError
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -55,7 +56,7 @@ async def get_dataset(dataset_id: str):
     dataset = find_by_id(datasets, dataset_id)
 
     if not dataset:
-        raise HTTPException(status_code=404, detail="Dataset not found")
+        raise ResourceNotFoundError("Dataset", dataset_id)
 
     return dataset
 
@@ -87,7 +88,7 @@ async def delete_dataset(dataset_id: str):
     dataset = find_by_id(datasets, dataset_id)
 
     if not dataset:
-        raise HTTPException(status_code=404, detail="Dataset not found")
+        raise ResourceNotFoundError("Dataset", dataset_id)
 
     # Remove from list
     datasets = remove_by_id(datasets, dataset_id)

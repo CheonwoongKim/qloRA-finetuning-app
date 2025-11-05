@@ -146,88 +146,66 @@ class QLoRATrainer:
         self.model.print_trainable_parameters()
         self.log_message("INFO", "Model prepared successfully")
 
-    def prepare_dataset(self):
-        """Load and prepare dataset"""
-        self.log_message("INFO", f"Loading dataset from {self.config.dataset_path}")
-
-        # Check if dataset_path is a local dataset name (from uploaded datasets)
+    def _find_local_dataset(self, dataset_name: str) -> Optional[Dict[str, Any]]:
+        """Find dataset in local uploaded datasets metadata"""
         datasets_meta_file = Path("./uploaded_datasets/datasets_meta.json")
-        if datasets_meta_file.exists():
+        if not datasets_meta_file.exists():
+            return None
+
+        try:
             with open(datasets_meta_file, 'r') as f:
                 datasets_meta = json.load(f)
 
-            # Find dataset by name
-            local_dataset = None
             for ds in datasets_meta:
-                if ds.get("name") == self.config.dataset_path:
-                    local_dataset = ds
-                    break
+                if ds.get("name") == dataset_name:
+                    return ds
+        except Exception as e:
+            self.log_message("WARNING", f"Error reading datasets metadata: {str(e)}")
 
-            if local_dataset:
-                # Dataset found in local datasets - extract content and save to temp file
-                self.log_message("INFO", f"Found local dataset: {local_dataset['name']}")
-                dataset_content = json.loads(local_dataset["content"])
+        return None
 
-                # Save to temporary file
-                temp_dataset_path = Path(f"./uploaded_datasets/{local_dataset['id']}.json")
-                with open(temp_dataset_path, 'w') as f:
-                    json.dump(dataset_content, f, ensure_ascii=False, indent=2)
+    def _load_local_dataset(self, local_dataset: Dict[str, Any]):
+        """Load dataset from local uploaded datasets"""
+        self.log_message("INFO", f"Found local dataset: {local_dataset['name']}")
+        dataset_content = json.loads(local_dataset["content"])
 
-                self.log_message("INFO", f"Created temporary dataset file: {temp_dataset_path}")
-                dataset = load_dataset('json', data_files=str(temp_dataset_path))
-            else:
-                # Not a local dataset, continue with normal flow
-                dataset_path = Path(self.config.dataset_path)
+        # Save to temporary file
+        temp_dataset_path = Path(f"./uploaded_datasets/{local_dataset['id']}.json")
+        with open(temp_dataset_path, 'w') as f:
+            json.dump(dataset_content, f, ensure_ascii=False, indent=2)
 
-                if dataset_path.is_file():
-                    # Load from file
-                    if dataset_path.suffix == '.json':
-                        dataset = load_dataset('json', data_files=str(dataset_path))
-                    elif dataset_path.suffix == '.csv':
-                        dataset = load_dataset('csv', data_files=str(dataset_path))
-                    else:
-                        raise ValueError(f"Unsupported file format: {dataset_path.suffix}")
-                else:
-                    # Try loading as HuggingFace dataset name
-                    dataset = load_dataset(self.config.dataset_path)
+        self.log_message("INFO", f"Created temporary dataset file: {temp_dataset_path}")
+        return load_dataset('json', data_files=str(temp_dataset_path))
+
+    def _load_file_dataset(self, dataset_path: Path):
+        """Load dataset from file"""
+        if dataset_path.suffix == '.json':
+            return load_dataset('json', data_files=str(dataset_path))
+        elif dataset_path.suffix == '.csv':
+            return load_dataset('csv', data_files=str(dataset_path))
         else:
-            # datasets_meta.json doesn't exist, use original logic
-            dataset_path = Path(self.config.dataset_path)
+            raise ValueError(f"Unsupported file format: {dataset_path.suffix}")
 
-            if dataset_path.is_file():
-                # Load from file
-                if dataset_path.suffix == '.json':
-                    dataset = load_dataset('json', data_files=str(dataset_path))
-                elif dataset_path.suffix == '.csv':
-                    dataset = load_dataset('csv', data_files=str(dataset_path))
-                else:
-                    raise ValueError(f"Unsupported file format: {dataset_path.suffix}")
-            else:
-                # Try loading as HuggingFace dataset name
-                dataset = load_dataset(self.config.dataset_path)
+    def _format_example_text(self, examples: Dict[str, Any], index: int) -> str:
+        """Format a single example into text"""
+        instruction = examples['instruction'][index]
+        input_text = examples.get('input', [''] * len(examples['instruction']))[index]
+        output = examples.get('output', [''] * len(examples['instruction']))[index]
 
-        self.log_message("INFO", f"Dataset loaded: {len(dataset['train'])} examples")
+        if input_text:
+            return f"### Instruction:\n{instruction}\n\n### Input:\n{input_text}\n\n### Response:\n{output}"
+        else:
+            return f"### Instruction:\n{instruction}\n\n### Response:\n{output}"
 
-        # Tokenize dataset
+    def _create_tokenize_function(self):
+        """Create tokenization function for dataset"""
         def tokenize_function(examples):
             # Check what fields are available in the dataset
             if 'text' in examples:
-                # Dataset has a 'text' field - use it directly
                 texts = examples['text']
             elif 'instruction' in examples:
-                # Dataset has instruction format - combine fields
-                texts = []
-                for i in range(len(examples['instruction'])):
-                    instruction = examples['instruction'][i]
-                    input_text = examples.get('input', [''] * len(examples['instruction']))[i]
-                    output = examples.get('output', [''] * len(examples['instruction']))[i]
-
-                    # Format as instruction-following format
-                    if input_text:
-                        text = f"### Instruction:\n{instruction}\n\n### Input:\n{input_text}\n\n### Response:\n{output}"
-                    else:
-                        text = f"### Instruction:\n{instruction}\n\n### Response:\n{output}"
-                    texts.append(text)
+                texts = [self._format_example_text(examples, i)
+                        for i in range(len(examples['instruction']))]
             else:
                 # Use first available field
                 first_field = list(examples.keys())[0]
@@ -240,6 +218,32 @@ class QLoRATrainer:
                 padding="max_length"
             )
 
+        return tokenize_function
+
+    def prepare_dataset(self):
+        """Load and prepare dataset"""
+        self.log_message("INFO", f"Loading dataset from {self.config.dataset_path}")
+
+        # Try to load from local uploaded datasets first
+        local_dataset = self._find_local_dataset(self.config.dataset_path)
+
+        if local_dataset:
+            dataset = self._load_local_dataset(local_dataset)
+        else:
+            # Try loading from file or HuggingFace
+            dataset_path = Path(self.config.dataset_path)
+
+            if dataset_path.is_file():
+                dataset = self._load_file_dataset(dataset_path)
+            else:
+                # Try loading as HuggingFace dataset name
+                dataset = load_dataset(self.config.dataset_path)
+
+        self.log_message("INFO", f"Dataset loaded: {len(dataset['train'])} examples")
+
+        # Tokenize dataset
+        tokenize_function = self._create_tokenize_function()
+
         self.log_message("INFO", "Tokenizing dataset...")
         tokenized_dataset = dataset.map(
             tokenize_function,
@@ -249,56 +253,50 @@ class QLoRATrainer:
 
         return tokenized_dataset["train"]
 
+    def _create_training_args(self) -> TrainingArguments:
+        """Create training arguments based on available hardware"""
+        use_cuda = torch.cuda.is_available()
+
+        # Common arguments
+        common_args = {
+            "output_dir": self.config.output_dir,
+            "num_train_epochs": self.config.num_epochs,
+            "per_device_train_batch_size": self.config.batch_size,
+            "gradient_accumulation_steps": self.config.gradient_accumulation_steps,
+            "learning_rate": self.config.learning_rate,
+            "warmup_steps": self.config.warmup_steps,
+            "logging_steps": self.config.logging_steps,
+            "save_steps": self.config.save_steps,
+            "save_total_limit": 3,
+            "logging_dir": f"{self.config.output_dir}/logs",
+            "report_to": ["none"],  # Disable wandb/tensorboard
+        }
+
+        if use_cuda:
+            # GPU training with fp16 and 8-bit optimizer
+            return TrainingArguments(**common_args, fp16=True, optim="paged_adamw_8bit")
+        else:
+            # CPU/MPS training without fp16 and with standard AdamW
+            self.log_message("INFO", "Using CPU/MPS training configuration (no fp16, standard AdamW)")
+            return TrainingArguments(**common_args, fp16=False, optim="adamw_torch")
+
+    def _save_final_model(self):
+        """Save the final trained model"""
+        final_output_dir = Path(self.config.output_dir) / "final_model"
+        self.log_message("INFO", f"Saving final model to {final_output_dir}")
+        self.trainer.save_model(str(final_output_dir))
+
     def train(self):
         """Start training"""
         try:
             self.log_message("INFO", "Initializing QLoRA training...")
 
-            # Prepare model
+            # Prepare model and dataset
             self.prepare_model()
-
-            # Prepare dataset
             train_dataset = self.prepare_dataset()
 
-            # Training arguments - adaptive based on available hardware
-            use_cuda = torch.cuda.is_available()
-
-            # Configure training args based on hardware
-            if use_cuda:
-                # GPU training with fp16 and 8-bit optimizer
-                training_args = TrainingArguments(
-                    output_dir=self.config.output_dir,
-                    num_train_epochs=self.config.num_epochs,
-                    per_device_train_batch_size=self.config.batch_size,
-                    gradient_accumulation_steps=self.config.gradient_accumulation_steps,
-                    learning_rate=self.config.learning_rate,
-                    warmup_steps=self.config.warmup_steps,
-                    logging_steps=self.config.logging_steps,
-                    save_steps=self.config.save_steps,
-                    save_total_limit=3,
-                    fp16=True,
-                    optim="paged_adamw_8bit",
-                    logging_dir=f"{self.config.output_dir}/logs",
-                    report_to=["none"],  # Disable wandb/tensorboard
-                )
-            else:
-                # CPU/MPS training without fp16 and with standard AdamW
-                self.log_message("INFO", "Using CPU/MPS training configuration (no fp16, standard AdamW)")
-                training_args = TrainingArguments(
-                    output_dir=self.config.output_dir,
-                    num_train_epochs=self.config.num_epochs,
-                    per_device_train_batch_size=self.config.batch_size,
-                    gradient_accumulation_steps=self.config.gradient_accumulation_steps,
-                    learning_rate=self.config.learning_rate,
-                    warmup_steps=self.config.warmup_steps,
-                    logging_steps=self.config.logging_steps,
-                    save_steps=self.config.save_steps,
-                    save_total_limit=3,
-                    fp16=False,  # Disable fp16 for CPU/MPS
-                    optim="adamw_torch",  # Use standard AdamW for CPU/MPS
-                    logging_dir=f"{self.config.output_dir}/logs",
-                    report_to=["none"],  # Disable wandb/tensorboard
-                )
+            # Create training arguments
+            training_args = self._create_training_args()
 
             # Data collator
             data_collator = DataCollatorForLanguageModeling(
@@ -322,9 +320,7 @@ class QLoRATrainer:
             self.log_message("INFO", "Training completed successfully")
 
             # Save final model
-            final_output_dir = Path(self.config.output_dir) / "final_model"
-            self.log_message("INFO", f"Saving final model to {final_output_dir}")
-            self.trainer.save_model(str(final_output_dir))
+            self._save_final_model()
 
             return True
 

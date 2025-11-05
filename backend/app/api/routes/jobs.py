@@ -17,6 +17,7 @@ from app.core.storage import (
     remove_by_id
 )
 from app.core.trainer import start_training_job
+from app.core.exceptions import ResourceNotFoundError, ResourceAlreadyExistsError, OperationError
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -72,69 +73,102 @@ def save_job_checkpoints(job_id: str, checkpoints: List[Dict[str, Any]]) -> bool
     ckpt_file = CHECKPOINTS_DIR / f"{job_id}.json"
     return save_json_file(ckpt_file, checkpoints)
 
+def _generate_loss_point(step: int, previous_loss: float) -> Dict[str, Any]:
+    """Generate a single loss data point"""
+    decay_rate = 0.98
+    noise = random.uniform(-0.05, 0.05)
+    current_loss = max(0.1, previous_loss * decay_rate + noise)
+    timestamp = datetime.now() - timedelta(minutes=50 - (step // 10))
+
+    return {
+        "step": (step + 1) * 10,
+        "epoch": (step // 10) + 1,
+        "loss": round(current_loss, 4),
+        "timestamp": timestamp.isoformat(),
+        "time_display": timestamp.strftime("%H:%M:%S")
+    }
+
+
 def initialize_demo_loss_history(job_id: str) -> List[Dict[str, Any]]:
     """Initialize demo loss history for visualization (only if no data exists)"""
     start_loss = 2.5
     current_loss = start_loss
     history = []
-    base_time = datetime.now() - timedelta(minutes=50)
 
     for i in range(50):
-        decay_rate = 0.98
-        noise = random.uniform(-0.05, 0.05)
-        current_loss = max(0.1, current_loss * decay_rate + noise)
-        timestamp = base_time + timedelta(minutes=i)
-
-        history.append({
-            "step": (i + 1) * 10,
-            "epoch": (i // 10) + 1,
-            "loss": round(current_loss, 4),
-            "timestamp": timestamp.isoformat(),
-            "time_display": timestamp.strftime("%H:%M:%S")
-        })
+        point = _generate_loss_point(i, current_loss)
+        current_loss = point["loss"]
+        history.append(point)
 
     return history
 
 
-@router.get("/{job_id}/metrics")
-async def get_job_metrics(job_id: str):
-    """Get training metrics for a specific job"""
+def _create_demo_job_data(job_id: str) -> Dict[str, Any]:
+    """Create demo job data for visualization"""
+    return {
+        "id": job_id,
+        "loss_history": initialize_demo_loss_history(job_id),
+        "current_step": 500,
+        "total_steps": 1000,
+        "current_epoch": 3,
+        "total_epochs": 5
+    }
 
-    # Check if job exists in metadata
-    jobs = load_jobs_metadata()
-    job = find_by_id(jobs, job_id)
 
-    if not job:
-        # If no metadata exists, initialize demo data for visualization
-        if job_id not in training_jobs:
-            training_jobs[job_id] = {
-                "id": job_id,
-                "loss_history": initialize_demo_loss_history(job_id),
-                "current_step": 500,
-                "total_steps": 1000,
-                "current_epoch": 3,
-                "total_epochs": 5
-            }
+def _create_demo_logs(job_id: str) -> List[Dict[str, Any]]:
+    """Create demo logs for visualization"""
+    current_time = datetime.now()
+    return [
+        {"timestamp": (current_time - timedelta(seconds=40)).strftime("%H:%M:%S"), "level": "INFO", "message": "Initializing QLoRA training..."},
+        {"timestamp": (current_time - timedelta(seconds=39)).strftime("%H:%M:%S"), "level": "INFO", "message": f"Loading model for job {job_id}"},
+        {"timestamp": (current_time - timedelta(seconds=38)).strftime("%H:%M:%S"), "level": "INFO", "message": "Applying 4-bit quantization..."},
+        {"timestamp": (current_time - timedelta(seconds=37)).strftime("%H:%M:%S"), "level": "INFO", "message": "LoRA rank: 8, alpha: 16"},
+        {"timestamp": (current_time - timedelta(seconds=36)).strftime("%H:%M:%S"), "level": "INFO", "message": "Training started - Epoch 1/3"},
+        {"timestamp": (current_time - timedelta(seconds=26)).strftime("%H:%M:%S"), "level": "INFO", "message": "Step 10/300 - Loss: 0.6234"},
+        {"timestamp": (current_time - timedelta(seconds=16)).strftime("%H:%M:%S"), "level": "INFO", "message": "Step 20/300 - Loss: 0.5891"},
+        {"timestamp": (current_time - timedelta(seconds=6)).strftime("%H:%M:%S"), "level": "INFO", "message": "Step 30/300 - Loss: 0.5567"},
+    ]
 
-        job_data = training_jobs[job_id]
 
-        # Simulate real-time updates for demo
-        if len(job_data["loss_history"]) < 100:
-            last_point = job_data["loss_history"][-1]
-            new_step = last_point["step"] + 10
-            new_loss = max(0.1, last_point["loss"] * 0.98 + random.uniform(-0.03, 0.03))
-            new_timestamp = datetime.now()
+def _create_demo_checkpoints(job_id: str) -> List[Dict[str, Any]]:
+    """Create demo checkpoints for visualization"""
+    current_time = datetime.now()
+    return [
+        {
+            "id": f"ckpt-{job_id}-1",
+            "epoch": 1,
+            "step": 100,
+            "loss": 0.6234,
+            "timestamp": (current_time - timedelta(minutes=20)).strftime("%H:%M:%S"),
+            "file_path": f"/checkpoints/{job_id}/checkpoint-100.pt",
+            "file_size_mb": 245.3
+        },
+        {
+            "id": f"ckpt-{job_id}-2",
+            "epoch": 1,
+            "step": 200,
+            "loss": 0.5567,
+            "timestamp": (current_time - timedelta(minutes=15)).strftime("%H:%M:%S"),
+            "file_path": f"/checkpoints/{job_id}/checkpoint-200.pt",
+            "file_size_mb": 245.3
+        },
+        {
+            "id": f"ckpt-{job_id}-3",
+            "epoch": 2,
+            "step": 100,
+            "loss": 0.4891,
+            "timestamp": (current_time - timedelta(minutes=10)).strftime("%H:%M:%S"),
+            "file_path": f"/checkpoints/{job_id}/checkpoint-300.pt",
+            "file_size_mb": 245.3
+        },
+    ]
 
-            job_data["loss_history"].append({
-                "step": new_step,
-                "epoch": (new_step // 100) + 1,
-                "loss": round(new_loss, 4),
-                "timestamp": new_timestamp.isoformat(),
-                "time_display": new_timestamp.strftime("%H:%M:%S")
-            })
-    else:
-        # Load from memory cache or initialize
-        if job_id not in training_jobs:
+
+def _get_or_create_job_data(job_id: str, job: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Get job data from cache or create new demo data"""
+    if job_id not in training_jobs:
+        if job:
+            # Create from existing job metadata
             training_jobs[job_id] = {
                 "id": job_id,
                 "loss_history": job.get("loss_history", []),
@@ -143,9 +177,45 @@ async def get_job_metrics(job_id: str):
                 "current_epoch": job.get("current_epoch", 1),
                 "total_epochs": job.get("total_epochs", 3)
             }
+        else:
+            # Create demo data
+            training_jobs[job_id] = _create_demo_job_data(job_id)
 
-        job_data = training_jobs[job_id]
+    return training_jobs[job_id]
 
+
+def _simulate_real_time_update(job_data: Dict[str, Any]):
+    """Simulate real-time loss updates for demo"""
+    if len(job_data["loss_history"]) < 100:
+        last_point = job_data["loss_history"][-1]
+        new_step = last_point["step"] + 10
+        new_loss = max(0.1, last_point["loss"] * 0.98 + random.uniform(-0.03, 0.03))
+        new_timestamp = datetime.now()
+
+        job_data["loss_history"].append({
+            "step": new_step,
+            "epoch": (new_step // 100) + 1,
+            "loss": round(new_loss, 4),
+            "timestamp": new_timestamp.isoformat(),
+            "time_display": new_timestamp.strftime("%H:%M:%S")
+        })
+
+
+@router.get("/{job_id}/metrics")
+async def get_job_metrics(job_id: str):
+    """Get training metrics for a specific job"""
+    # Check if job exists in metadata
+    jobs = load_jobs_metadata()
+    job = find_by_id(jobs, job_id)
+
+    # Get or create job data
+    job_data = _get_or_create_job_data(job_id, job)
+
+    # Simulate real-time updates for demo (only if no actual job exists)
+    if not job:
+        _simulate_real_time_update(job_data)
+
+    # Return empty metrics if no loss history
     if not job_data["loss_history"]:
         return {
             "job_id": job_id,
@@ -159,13 +229,15 @@ async def get_job_metrics(job_id: str):
             }
         }
 
+    # Return metrics with loss history
+    latest_loss = job_data["loss_history"][-1]
     return {
         "job_id": job_id,
         "loss_history": job_data["loss_history"],
         "current_metrics": {
-            "current_loss": job_data["loss_history"][-1]["loss"],
-            "current_step": job_data["loss_history"][-1]["step"],
-            "current_epoch": job_data["loss_history"][-1]["epoch"],
+            "current_loss": latest_loss["loss"],
+            "current_step": latest_loss["step"],
+            "current_epoch": latest_loss["epoch"],
             "total_steps": job_data.get("total_steps", 1000),
             "total_epochs": job_data.get("total_epochs", 3)
         }
@@ -244,11 +316,11 @@ async def start_job(job_id: str):
     job = find_by_id(jobs, job_id)
 
     if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise ResourceNotFoundError("Job", job_id)
 
     # Check if job is already running
     if job_id in running_jobs and running_jobs[job_id].is_alive():
-        raise HTTPException(status_code=400, detail="Job is already running")
+        raise ResourceAlreadyExistsError("Running job", job_id)
 
     # Update job status to running
     job["status"] = "running"
@@ -355,7 +427,7 @@ async def delete_job(job_id: str):
     job = find_by_id(jobs, job_id)
 
     if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise ResourceNotFoundError("Job", job_id)
 
     # Remove from metadata
     jobs = remove_by_id(jobs, job_id)
@@ -378,22 +450,11 @@ async def delete_job(job_id: str):
 @router.get("/{job_id}/logs")
 async def get_job_logs(job_id: str):
     """Get training logs for a specific job"""
-
     logs = load_job_logs(job_id)
 
     # If no logs exist, initialize with demo logs for visualization
     if not logs:
-        current_time = datetime.now()
-        logs = [
-            {"timestamp": (current_time - timedelta(seconds=40)).strftime("%H:%M:%S"), "level": "INFO", "message": "Initializing QLoRA training..."},
-            {"timestamp": (current_time - timedelta(seconds=39)).strftime("%H:%M:%S"), "level": "INFO", "message": f"Loading model for job {job_id}"},
-            {"timestamp": (current_time - timedelta(seconds=38)).strftime("%H:%M:%S"), "level": "INFO", "message": "Applying 4-bit quantization..."},
-            {"timestamp": (current_time - timedelta(seconds=37)).strftime("%H:%M:%S"), "level": "INFO", "message": "LoRA rank: 8, alpha: 16"},
-            {"timestamp": (current_time - timedelta(seconds=36)).strftime("%H:%M:%S"), "level": "INFO", "message": "Training started - Epoch 1/3"},
-            {"timestamp": (current_time - timedelta(seconds=26)).strftime("%H:%M:%S"), "level": "INFO", "message": "Step 10/300 - Loss: 0.6234"},
-            {"timestamp": (current_time - timedelta(seconds=16)).strftime("%H:%M:%S"), "level": "INFO", "message": "Step 20/300 - Loss: 0.5891"},
-            {"timestamp": (current_time - timedelta(seconds=6)).strftime("%H:%M:%S"), "level": "INFO", "message": "Step 30/300 - Loss: 0.5567"},
-        ]
+        logs = _create_demo_logs(job_id)
         save_job_logs(job_id, logs)
 
     return {
@@ -406,41 +467,11 @@ async def get_job_logs(job_id: str):
 @router.get("/{job_id}/checkpoints")
 async def get_job_checkpoints(job_id: str):
     """Get saved checkpoints for a specific job"""
-
     checkpoints = load_job_checkpoints(job_id)
 
     # If no checkpoints exist, initialize with demo checkpoints for visualization
     if not checkpoints:
-        current_time = datetime.now()
-        checkpoints = [
-            {
-                "id": f"ckpt-{job_id}-1",
-                "epoch": 1,
-                "step": 100,
-                "loss": 0.6234,
-                "timestamp": (current_time - timedelta(minutes=20)).strftime("%H:%M:%S"),
-                "file_path": f"/checkpoints/{job_id}/checkpoint-100.pt",
-                "file_size_mb": 245.3
-            },
-            {
-                "id": f"ckpt-{job_id}-2",
-                "epoch": 1,
-                "step": 200,
-                "loss": 0.5567,
-                "timestamp": (current_time - timedelta(minutes=15)).strftime("%H:%M:%S"),
-                "file_path": f"/checkpoints/{job_id}/checkpoint-200.pt",
-                "file_size_mb": 245.3
-            },
-            {
-                "id": f"ckpt-{job_id}-3",
-                "epoch": 2,
-                "step": 100,
-                "loss": 0.4891,
-                "timestamp": (current_time - timedelta(minutes=10)).strftime("%H:%M:%S"),
-                "file_path": f"/checkpoints/{job_id}/checkpoint-300.pt",
-                "file_size_mb": 245.3
-            },
-        ]
+        checkpoints = _create_demo_checkpoints(job_id)
         save_job_checkpoints(job_id, checkpoints)
 
     return {
@@ -458,7 +489,7 @@ async def download_checkpoint(job_id: str, checkpoint_id: str):
     checkpoint = find_by_id(checkpoints, checkpoint_id)
 
     if not checkpoint:
-        raise HTTPException(status_code=404, detail="Checkpoint not found")
+        raise ResourceNotFoundError("Checkpoint", checkpoint_id)
 
     # In a real implementation, this would return the actual checkpoint file
     # For demo purposes, we'll create a dummy file or return a message
