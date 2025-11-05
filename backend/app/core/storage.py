@@ -143,3 +143,125 @@ def remove_by_id(
         New list without the item
     """
     return [item for item in items if item.get(id_field) != item_id]
+
+
+class MetadataManager:
+    """
+    Generic metadata manager for handling JSON-based metadata files.
+    Eliminates duplicate load/save patterns across the codebase.
+    """
+
+    def __init__(self, file_path: Path, auto_init: bool = True):
+        """
+        Initialize the metadata manager.
+
+        Args:
+            file_path: Path to the metadata JSON file
+            auto_init: Whether to automatically ensure parent directory exists
+        """
+        self.file_path = file_path
+        if auto_init:
+            ensure_directory(file_path.parent)
+
+    def load(self, default: Any = None) -> List[Dict[str, Any]]:
+        """
+        Load metadata from file.
+
+        Args:
+            default: Default value to return if file doesn't exist
+
+        Returns:
+            List of metadata items
+        """
+        if default is None:
+            default = []
+        return load_json_file(self.file_path, default=default)
+
+    def save(self, data: List[Dict[str, Any]]) -> bool:
+        """
+        Save metadata to file.
+
+        Args:
+            data: List of metadata items to save
+
+        Returns:
+            True if successful, False otherwise
+        """
+        return save_json_file(self.file_path, data)
+
+    def find_by_id(self, item_id: str, id_field: str = "id") -> Optional[Dict[str, Any]]:
+        """
+        Find an item by its ID.
+
+        Args:
+            item_id: ID to search for
+            id_field: Name of the ID field
+
+        Returns:
+            Found item or None
+        """
+        items = self.load()
+        return find_by_id(items, item_id, id_field)
+
+    def add(self, item: Dict[str, Any]) -> bool:
+        """
+        Add a new item to metadata.
+
+        Args:
+            item: Item to add
+
+        Returns:
+            True if successful, False otherwise
+        """
+        items = self.load()
+        items.append(item)
+        return self.save(items)
+
+    def update_by_id(
+        self,
+        item_id: str,
+        updates: Dict[str, Any],
+        id_field: str = "id"
+    ) -> bool:
+        """
+        Update an item by its ID.
+
+        Args:
+            item_id: ID of the item to update
+            updates: Dictionary of fields to update
+            id_field: Name of the ID field
+
+        Returns:
+            True if successful, False otherwise
+        """
+        items = self.load()
+        item = find_by_id(items, item_id, id_field)
+        if not item:
+            return False
+
+        item.update(updates)
+        return self.save(items)
+
+    def remove_by_id(self, item_id: str, id_field: str = "id") -> bool:
+        """
+        Remove an item by its ID.
+
+        Args:
+            item_id: ID of the item to remove
+            id_field: Name of the ID field
+
+        Returns:
+            True if successful, False otherwise
+        """
+        items = self.load()
+        updated_items = remove_by_id(items, item_id, id_field)
+        return self.save(updated_items)
+
+    def count(self) -> int:
+        """
+        Get the count of items in metadata.
+
+        Returns:
+            Number of items
+        """
+        return len(self.load())
